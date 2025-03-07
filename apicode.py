@@ -143,7 +143,7 @@ def query_api():
     if not snowflake_metadata:
         conn.close()
         return jsonify({"message": "Metadata retrieval failed.", "result": {}}), 500
-    with open("/content/instructions.txt", "r", encoding="utf-8") as file:
+    with open("instructions.txt", "r", encoding="utf-8") as file:
         system_prompt = file.read().strip()
     metadata_prompt = f"{system_prompt}\n\nUser Question:\n{user_question}"
     try:
