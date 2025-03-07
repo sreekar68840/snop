@@ -1,0 +1,207 @@
+Terminological Instruction for Snowflake:
+Strictly follow these instructions for their respective queries, adapted for Snowflake.
+
+the metadata or the scehma of the database in given use this also in formation of the query
+
+{{snowflake_metadata}}
+
+**Delay in Order:**
+   - The delay can be calculated as the difference between `latest_po_receive_date` and `requested_date` in the `md_salesorder` table.
+   - Only include orders where `po_status` is 'Delayed'.
+   - Use Snowflake's `DATEDIFF` function to calculate the delay.
+
+**Top 5 Orders with the Highest Delay for High-Priority Customers:**
+   - Use the `md_salesorder` and `md_customer` tables, joining them on `customer_id`.
+   - Calculate the delay as the difference in days between `requested_date` and `latest_po_receive_date`.
+   - Select relevant fields: `sales_order`, `customer_id`, `location_id`, `product_id`, `latest_po_receive_date`, `po_status`, `requested_date`, and `vendor_id`.
+   - Filter customers with `cp_customer_attribute = 'High Priority'`.
+   - Sort by delay in descending order.
+   - Use `LIMIT 5` instead of `TOP 5`.
+WITH order_info AS (
+  SELECT
+    so.sales_order,
+    CAST(so.product_id AS STRING) AS product_id,
+    CAST(so.location_id AS STRING) AS location_id,
+    COALESCE(CAST(so.vendor_id AS STRING), '') AS vendor_id,
+    so.requested_quantity
+  FROM "SNOP_DB"."SNOP_SCHEMA".md_salesorder so
+  WHERE so.sales_order = '339'
+),
+expedite_options AS (
+  SELECT DISTINCT
+    CAST(ls.ship_from_loc_id AS STRING) AS ship_from_loc_id,
+    oi.product_id,
+    oi.location_id,
+    CAST(ls.mode_of_transport_id AS STRING) AS mode_of_transport_id,
+    ls.transportation_lead_time,
+    oi.requested_quantity,
+    tr.cost_rollup_transportation_cost_rate,
+    ROUND(oi.requested_quantity * tr.cost_rollup_transportation_cost_rate, 2) AS total_cost
+  FROM "SNOP_DB"."SNOP_SCHEMA".md_location_source ls
+  JOIN order_info oi
+    ON ls.product_id = oi.product_id
+   AND ls.location_id = oi.location_id
+  JOIN "SNOP_DB"."SNOP_SCHEMA".md_transaction tr
+    ON tr.product_id = oi.product_id
+   AND tr.location_id = oi.location_id
+   AND CAST(tr.mot_id AS STRING) = ls.mode_of_transport_id
+  WHERE oi.vendor_id = ls.ship_from_loc_id
+)
+SELECT
+  ship_from_loc_id,
+  product_id,
+  location_id,
+  mode_of_transport_id,
+  transportation_lead_time,
+  requested_quantity,
+  cost_rollup_transportation_cost_rate,
+  total_cost
+FROM expedite_options
+ORDER BY total_cost DESC;
+
+
+**Reassign Low/Medium Priority Orders to Fulfill a Specified Order:**
+   - Use `md_salesorder` and `md_customer` tables, joining on `customer_id`.
+   - Select relevant fields: `sales_order`, `customer_id`, `product_id`, `requested_quantity`, `requested_date`, and `po_status`.
+   - Filter for orders matching the same `product_id` as the specified order with `po_status = 'Delayed'`.
+   - Ensure customer priority is 'Low Priority' or 'Medium Priority'.
+
+**Find Alternate Vendors for a Specific Order:**
+   - Use `md_location_source` and `md_salesorder`.
+   - Join on `product_id` and `location_id`, excluding the current vendor.
+   - Filter for the specified `sales_order` without hardcoding values.
+   - Select fields: `ship_from_loc_id`, `product_id`, `location_id`, `mode_of_transport_id`, `md_salesorder.requested_quantity`, and `transportation_lead_time`.
+   - Use `SELECT DISTINCT`.
+
+
+
+Identify the products and customer combinations with unmet annual budget revenue targets by starting with the two source tables: `md_transaction` and `md_customer`. In your query, select `product_id`, `customer_id`, and `ytd_revenue_gap_against_target_revenue` (renaming it as `total_revenue_gap`) from the `md_transaction` table, and the `customer_region` column from `md_customer`. Join these tables on the common `customer_id` field to link each transaction with its corresponding customer region. Use a WHERE clause to filter the data for records where `key_figure_date` is dynamically set to the first of December of the specified year (for instance, `'2024-12-01'`) and where `ytd_revenue_gap_against_target_revenue` is greater than zero. To ensure accuracy and consistency, reference the tables with their fully qualified names (e.g., `"SNOP_DB"."SNOP_SCHEMA".md_transaction` and `"SNOP_DB"."SNOP_SCHEMA".md_customer`) and sort the output by `total_revenue_gap` in descending order.
+
+For the revenue gap calculation based on price reduction and demand increase, structure your query using Snowflake’s common table expressions (CTEs). Begin by creating a CTE named `top_3_combinations` that selects the top three product-customer combinations with the highest revenue gaps. Then, create additional CTEs: `price_data` to extract the latest price for each combination, `demand_data` to retrieve the consensus baseline demand, `monthly_projected_revenue` to calculate projected revenue based on adjusted prices and demand, `ytd_rev` to obtain the actual year-to-date revenue, and `total_projected_revenue` to compute the cumulative projected revenue until December. Join these CTEs appropriately to correlate the data, ensuring that filtering conditions are dynamic to accommodate current and past months. Use the `ROUND` function to format monetary values as needed, and finally, order the results by `original_revenue_gap` in descending order.
+
+
+calculate the new revenue gap for the top 3 product-customer combinations with the highest revenue gap if:
+
+The selling price is reduced by X%.
+The demand is increased by Y%.
+You will provide the updated projected revenue and new revenue gap for each of these combinations.
+
+User Query Format Example:
+"If we reduce the selling price by 5% and increase the demand by 20% for the top 3 product-customer combinations, what will be the revenue gap for each of them?"
+
+SQL Query for Execution:
+Use the following SQL query to calculate the revenue gap, dynamically adjusting the price reduction (X%) and demand increase (Y%).
+
+sql
+Copy
+Edit
+WITH top_3_combinations AS (
+    SELECT 
+        md_transaction.product_id, 
+        md_transaction.customer_id, 
+        md_customer.customer_region, 
+        md_transaction.GROSS_TARGET_REVENUE_YTD AS target_revenue, 
+        md_transaction.YTD_ACTUALS_REVENUE_CONSENSUS_DEMAND_REVENUE AS ytd_actual_revenue, 
+        md_transaction.YTD_REVENUE_GAP_AGAINST_TARGET_REVENUE AS original_revenue_gap
+    FROM 
+        md_transaction
+    JOIN 
+        md_customer ON md_transaction.customer_id = md_customer.customer_id
+    WHERE 
+        key_figure_date = '2024-12-01' -- yyyy is the current year (2024 or 2025)
+        AND md_transaction.ytd_revenue_gap_against_target_revenue > 0
+    ORDER BY 
+        YTD_REVENUE_GAP_AGAINST_TARGET_REVENUE DESC
+    LIMIT 3
+),
+price_data AS (
+    SELECT 
+        t.product_id,
+        t.customer_id,
+        MAX(price_m) AS price_m
+    FROM 
+        md_transaction t
+    WHERE 
+        key_figure_date BETWEEN '2024-03-01' AND '2024-12-01' 
+        AND key_figure_date LIKE '%-01'
+    GROUP BY 
+        t.product_id, t.customer_id
+),
+demand_data AS (
+    SELECT 
+        t.product_id,
+        t.customer_id,
+        MAX(consensus_baseline_demand) AS consensus_baseline_demand
+    FROM 
+        md_transaction t
+    WHERE 
+        key_figure_date BETWEEN '2024-03-01' AND '2024-12-01' 
+        AND key_figure_date LIKE '%-01'
+    GROUP BY 
+        t.product_id, t.customer_id
+),
+monthly_projected_revenue AS (
+    SELECT 
+        DISTINCT MONTH(key_figure_date) AS revenue_month,
+        t.product_id,
+        t.customer_id,
+        ROUND((p.price_m * (1.00 - {X}/100)) * (d.consensus_baseline_demand * (1.00 + {Y}/100)), 2) AS monthly_revenue
+    FROM 
+        md_transaction t
+    JOIN 
+        price_data p ON t.product_id = p.product_id 
+        AND t.customer_id = p.customer_id
+    JOIN 
+        demand_data d ON t.product_id = d.product_id 
+        AND t.customer_id = d.customer_id
+    WHERE 
+        key_figure_date BETWEEN '2024-03-01' AND '2024-12-01' 
+        AND key_figure_date LIKE '%-01'
+),
+ytd_rev AS (
+    SELECT
+        md_transaction.YTD_ACTUALS_REVENUE_CONSENSUS_DEMAND_REVENUE,
+        md_transaction.product_id,
+        md_transaction.customer_id
+    FROM
+        md_transaction
+    WHERE 
+        key_figure_date = '2024-02-01' -- Previous month data
+),
+total_projected_revenue AS (
+    SELECT 
+        product_id,
+        customer_id,
+        SUM(monthly_revenue) AS total_revenue_to_december
+    FROM 
+        monthly_projected_revenue
+    GROUP BY 
+        product_id, customer_id
+)
+SELECT 
+    t3.product_id,
+    t3.customer_id,
+    t3.customer_region,
+    t3.target_revenue,
+    t3.ytd_actual_revenue,
+    t3.original_revenue_gap,
+    ROUND(pr.total_revenue_to_december + ytd_rev.YTD_ACTUALS_REVENUE_CONSENSUS_DEMAND_REVENUE, 2) AS projected_revenue,
+    ROUND(t3.target_revenue - (pr.total_revenue_to_december + ytd_rev.YTD_ACTUALS_REVENUE_CONSENSUS_DEMAND_REVENUE), 2) AS new_revenue_gap
+FROM 
+    top_3_combinations t3
+JOIN 
+    total_projected_revenue pr ON t3.product_id = pr.product_id 
+    AND t3.customer_id = pr.customer_id
+JOIN
+    ytd_rev ON t3.product_id = ytd_rev.product_id 
+    AND t3.customer_id = ytd_rev.customer_id
+WHERE 
+    (pr.total_revenue_to_december + ytd_rev.YTD_ACTUALS_REVENUE_CONSENSUS_DEMAND_REVENUE) > 0
+ORDER BY 
+    t3.original_revenue_gap DESC;
+How to Use This Query
+Replace {X} with the percentage price reduction (e.g., 5 for a 5% decrease).
+Replace {Y} with the percentage demand increase (e.g., 20 for a 20% increase).
+The query will then compute:
+Projected revenue based on the adjusted selling price and demand.
+New revenue gap by subtracting the projected revenue from the target revenue.
